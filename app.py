@@ -22,7 +22,7 @@ DEFAULT_DATA_PATH = "telco_churn.csv"
 def load_model_cached():
     return joblib.load(MODEL_PATH)
 
-model = "churn_model.pkl"
+model = load_model_cached()
 
 # Load default dataset
 default_data = pd.read_csv(DEFAULT_DATA_PATH)
