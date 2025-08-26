@@ -6,15 +6,31 @@ from data_loader import load_csv, clean_telco, split_X_y
 from model import train_evaluate, predict_proba, save_model, load_model
 from explain import shap_global_summary, shap_waterfall_for_single
 from utils import compute_kpis, plot_churn_pie, plot_by_category
+import joblib
+import plotly.express as px
 
 st.set_page_config(page_title="Customer Churn App", layout="wide")
 
 st.title("📉 Customer Churn – Interactive App")
 st.caption("Telco dataset demo – upload CSV or use a cached training run. Includes KPIs, training, predictions, SHAP explanations, and segmentation.")
 
+# ================= Load Model and Default Data =================
+MODEL_PATH = "churn_model.pkl"
+DEFAULT_DATA_PATH = "telco_churn.csv"
+
+@st.cache_resource
+def load_model_cached():
+    return joblib.load(MODEL_PATH)
+
+model = load_model_cached()
+
+# Load default dataset
+default_data = pd.read_csv(DEFAULT_DATA_PATH)
+
+
 # --- Sidebar ---
 st.sidebar.header("Data")
-uploaded = st.sidebar.file_uploader("Upload Telco CSV", type=["csv"])  # e.g., WA_Fn-UseC_-Telco-Customer-Churn.csv
+uploaded = st.sidebar.file_uploader("Upload your own CSV", type=["csv"])  # e.g., WA_Fn-UseC_-Telco-Customer-Churn.csv
 
 @st.cache_data(show_spinner=False)
 def _load_and_clean(file):
@@ -24,9 +40,10 @@ def _load_and_clean(file):
 
 if uploaded:
     df = _load_and_clean(uploaded)
+    st.sidebar.success("✅ Custom dataset loaded")
 else:
-    st.info("Upload the Telco CSV to proceed.")
-    df = None
+    st.info("ℹ️ Using default Telco dataset")
+    df = clean_telco(default_data)
 
 # Tabs
 overview, train_tab, predict_tab, explain_tab, segment_tab = st.tabs([
@@ -48,17 +65,38 @@ with overview:
     c3.metric("Monthly Revenue (sum)", f"${kpis['monthly_revenue']:.0f}")
     c4.metric("Annual Revenue at Risk", f"${kpis['annual_rev_at_risk']:.0f}")
 
-    cA, cB = st.columns(2)
-    with cA:
-        fig = plot_churn_pie(df)
-        if fig: st.plotly_chart(fig, use_container_width=True)
-    with cB:
-        col_for_bar = st.selectbox(
-            "Churn by category",
-            [c for c in df.columns if c not in ["Churn", "customerID"] and df[c].dtype == "object"],
+    # --- Churn Distribution Pie Chart ---
+    if "Churn" in df.columns:
+        st.subheader("📊 Churn Distribution")
+        churn_counts = df["Churn"].value_counts()
+        fig_pie = px.pie(values=churn_counts.values, names=churn_counts.index,
+                        title="Churn Distribution")
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    # --- Churn by Category ---
+    st.subheader("📊 Churn by Category")
+
+    # Select categorical columns with limited unique values
+    cat_cols = [
+        c for c in df.columns 
+        if df[c].dtype == "object" 
+        and c != "Churn" 
+        and df[c].nunique() <= 20   # drop columns with too many unique values
+    ]
+
+    if cat_cols:
+        col_select = st.selectbox("Select categorical column", cat_cols)
+        fig_bar = px.histogram(
+            df, 
+            x=col_select, 
+            color="Churn" if "Churn" in df.columns else None,
+            barmode="group", 
+            title=f"Churn by {col_select}"
         )
-        fig2 = plot_by_category(df, col_for_bar)
-        if fig2: st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig_bar, use_container_width=True)
+    else:
+        st.info("No categorical columns with limited unique values to display for churn breakdown")
+
 
 # ===== Train & Evaluate =====
 with train_tab:
@@ -170,7 +208,7 @@ with explain_tab:
     st.write("Global summary (top drivers of churn) – computed on a background sample for speed.")
     bg_size = st.slider("Background sample size", 50, 1000, 200, 50)
     bg = X.sample(n=min(bg_size, len(X)), random_state=42)
-    fig = shap_global_summary(pipeline, bg)
+    fig = shap_global_summary(model, bg)
     st.pyplot(fig, clear_figure=True)
 
     st.write("\nSingle-customer explanation (waterfall):")
@@ -215,6 +253,5 @@ with segment_tab:
 
     plot_df = pd.DataFrame({"PC1": Z[:, 0], "PC2": Z[:, 1], "Cluster": labels, "Churn": y.values})
 
-    import plotly.express as px
     fig = px.scatter(plot_df, x="PC1", y="PC2", color="Cluster", symbol="Churn", title="Customer Segmentation")
     st.plotly_chart(fig, use_container_width=True)
