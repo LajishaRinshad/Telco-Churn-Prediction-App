@@ -4,15 +4,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 from data_loader import load_csv, clean_telco, split_X_y
 from model import train_evaluate, predict_proba, save_model, load_model
-from explain import shap_global_summary, shap_waterfall_for_single
 from utils import compute_kpis, plot_churn_pie, plot_by_category
 import joblib
 import plotly.express as px
+from sklearn.inspection import permutation_importance
 
 st.set_page_config(page_title="Customer Churn App", layout="wide")
 
 st.title("📉 Customer Churn – Interactive App")
-st.caption("Telco dataset demo – upload CSV or use a cached training run. Includes KPIs, training, predictions, SHAP explanations, and segmentation.")
+st.caption("Telco dataset demo – upload CSV or use a cached training run. Includes KPIs, training, predictions, explanations, and segmentation.")
 
 # ================= Load Model and Default Data =================
 MODEL_PATH = "churn_model.pkl"
@@ -189,9 +189,9 @@ with predict_tab:
 
 # ===== Explainability =====
 with explain_tab:
-    st.subheader("🧠 Explain Predictions (SHAP)")
+    st.subheader("🧠 Explain Predictions")
 
-    # Need a trained model and some data
+    # Load or train model
     model = None
     try:
         model = load_model("churn_model.pkl")
@@ -199,26 +199,30 @@ with explain_tab:
         if df is not None:
             X, y = split_X_y(df)
             model = train_evaluate(X, y)["pipeline"]
+
     if model is None or df is None:
         st.warning("Train/load a model and upload data to view explanations.")
         st.stop()
 
     X, y = split_X_y(df)
 
-    st.write("Global summary (top drivers of churn) – computed on a background sample for speed.")
-    bg_size = st.slider("Background sample size", 50, 1000, 200, 50)
-    bg = X.sample(n=min(bg_size, len(X)), random_state=42)
-    fig = shap_global_summary(model, bg)
+    # --- Global explanation: Feature Importance ---
+    st.write("### 🌍 Global Feature Importance")
+    n_feats = st.slider("Number of top features to display", 5, min(20, X.shape[1]), 10)
+
+    result = permutation_importance(model, X, y, n_repeats=10, random_state=42, n_jobs=-1)
+    importances = pd.DataFrame({
+        "Feature": X.columns,
+        "Importance": result.importances_mean
+    }).sort_values(by="Importance", ascending=False).head(n_feats)
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.barh(importances["Feature"], importances["Importance"])
+    ax.set_xlabel("Permutation Importance")
+    ax.invert_yaxis()
     st.pyplot(fig, clear_figure=True)
-
-    st.write("\nSingle-customer explanation (waterfall):")
-    if "last_input" in st.session_state:
-        one = st.session_state["last_input"]
-    else:
-        one = X.sample(1, random_state=42)
-    fig2 = shap_waterfall_for_single(model, one)
-    st.pyplot(fig2, clear_figure=True)
-
+    
+    
 # ===== Segmentation =====
 with segment_tab:
     st.subheader("🧩 Customer Segmentation (K-Means + PCA)")
